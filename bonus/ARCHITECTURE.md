@@ -1,189 +1,170 @@
-# Bonus Challenge: Hybrid Memory Agent Architecture
+# Bonus Challenge: Hybrid Memory Agent
 
-> Contributors: VuHieuThien (2A202602867)
-> Date: 2026-10-05
-> Status: POC complete — `python bonus/demo.py` exits 0.
+## 1. Đề bài
 
-## 1. Context
+Xây dựng trợ lý AI cá nhân cho người dùng tiếng Việt (think: ChatGPT + NotebookLM
+cho cá nhân). Trợ lý phải **nhớ** hai loại thông tin:
 
-This bonus extends Lab 19 by building a personal AI assistant for Vietnamese users
-that maintains two memory systems:
+1. **Ký ức sự kiện (episodic memory)** — các cuộc hội thoại, tài liệu đã đọc,
+   ghi chú người dùng. → Vector Store (lab 19 §1–§3).
+2. **Hồ sơ ổn định (stable profile)** — ngôn ngữ ưa thích, tốc độ đọc, lĩnh
+   vực quan tâm, hoạt động gần đây. → Feature Store (lab 19 §4).
+3. **Hoạt động gần đây** — câu truy vấn 1 giờ qua, topic đã hỏi nhiều, pattern
+   mệt mỏi. → Streaming feature (lab 19 §6).
 
-1. **Episodic memory** — past conversations, read documents, user notes.
-   Stored as dense vectors in Qdrant with hybrid (BM25 + vector) retrieval via RRF.
-2. **Stable profile** — user attributes from Feast Feature Store:
-   `topic_affinity`, `preferred_language`, `queries_last_hour`.
+Nhiệm vụ: thiết kế + build POC kết hợp cả hai. Document is the primary deliverable;
+code chỉ cần minimal để demo design quyết định.
 
-The agent (`HybridMemoryAgent`) exposes two methods:
-- `remember(text, user_id)` — chunk, embed, upsert to Qdrant.
-- `recall(query, user_id)` → context string — fetch profile from Feast,
-  hybrid-search episodic memory, assemble into an LLM-ready prompt.
-
-## 2. Architecture Diagram
+## 2. Sơ đồ kiến trúc
 
 ```mermaid
 flowchart TD
-    subgraph User["User (u_001)"]
-        Q[Query: "Tôi đang quan tâm gì gần đây?"]
+    subgraph User
+        Q[Query người dùng]
     end
 
     subgraph Agent["HybridMemoryAgent"]
         direction LR
-        A1[Chunk text → split by turns, max 200 tokens]
-        A2[Embed: bge-small-en-v15, 384-dim]
-        A3[Qdrant in-memory: episodic_memory collection]
-        A4[Feast online store: SQLite]
+        R1[remember: chunk → embed → upsert Qdrant]
+        R2[recall: lấy profile → hybrid search → assemble context]
     end
 
-    subgraph Profile["Stable Profile (Feast)"]
-        P1[topic_affinity: cloud]
-        P2[preferred_language: vi]
-        P3[queries_last_hour: 11]
-    end
-
-    subgraph Memory["Episodic Memory (Qdrant)"]
-        M1[BM25 index on chunk text]
-        M2[Vector index (COSINE)]
+    subgraph Memory["Ký ức sự kiện (Qdrant)"]
+        M1[Vector index: COSINE 384-dim]
+        M2[BM25 index: keyword trên chunk text]
         M3[RRF k=60 fusion]
     end
 
-    subgraph Output["Assembled Context"]
-        O1["User Profile section"]
-        O2["Episodic Memory top-K chunks"]
+    subgraph Profile["Hồ sơ ổn định (Feast)"]
+        P1[topic_affinity]
+        P2[preferred_language]
+        P3[queries_last_hour]
     end
 
-    Q --> A1
-    A1 --> A2 --> A3
-    A3 --> M1
-    A3 --> M2
+    Q --> R2
+    R2 --> Profile
+    Profile --> P1 & P2 & P3
+    R2 --> Memory
+    Memory --> M1 & M2
     M1 --> M3
     M2 --> M3
-    A4 --> Profile
-    Profile --> P1 & P2 & P3
-    M3 --> Memory
-    P1 & P2 & P3 --> Output
-    M3 --> Output
-    O1 --> O2 --> C[Context string for LLM]
+
+    R1 --> Memory
+    M3 --> R2
+
+    P1 & P2 & P3 --> C[Context: profile + top-K memories]
+    M3 --> C
+
+    subgraph Output
+        C
+    end
 ```
 
 **Data flow:**
-1. `remember()` chops incoming text into ≤200-token chunks by conversation turn.
-2. Each chunk embedded via `fastembed` → stored in Qdrant with `user_id` payload.
-3. `recall()` fetches user profile from Feast online store (<10ms lookup).
-4. Query embedded → vector ANN search + BM25 lexical search, both filtered by `user_id`.
-5. RRF (k=60) fuses results → top-K memory chunks.
-6. Context string assembled: profile + ranked memories.
 
-## 3. Three Architecture Decisions (with explicit tradeoff)
+1. `remember(text, user_id)`: chia text thành chunk ≤ 200 token theo turn, embed
+   bằng `bge-small-en-v1.5`, upsert vào Qdrant collection với payload `user_id`.
+2. `recall(query, user_id)`: truy xuất user profile từ Feast online store.
+3. Truy vấn cùng query — embed → vector ANN search (filtered by user_id) +
+   BM25 keyword search.
+4. RRF (k=60) hợp nhất kết quả, trả về top-K memory chunks.
+5. Gộp profile + memories thành context string cho LLM.
 
-### Decision 1: Chunking Strategy — Semantic Turn Split vs Fixed-Size Sliding Window
+## 3. Ba quyết định kiến trúc (với tradeoff tường minh)
 
-**Chosen: Semantic turn split** — split memory text on `User:` / `Assistant:`
-markers, cap at 200 tokens. If a turn exceeds 200 tokens, fall back to sentence-level
-splitting.
+### Quyết định 1: Chiến lược chia chunk — Semantic Turn Split
 
-| Approach | Retrieval quality | Storage cost | Context efficiency |
-|---|---|---|---|
-| Semantic turn split (chosen) | High — each chunk is a complete thought | Moderate — 1-3 chunks per memory | Good — chunks are self-contained |
-| Fixed 128-token sliding window | Lower — chunks cut mid-sentence, lose meaning | High — 5-10x more chunks | Poor — many partial chunks with no signal |
-| Per-sentence (no merge) | Low-medium — too granular, no context window | Very high — 10x more points | Poor — retrieval signal diluted |
+**Chọn:** Chia theo dấu hiệu `User:` / `Assistant:`, tối đa 200 token mỗi chunk.
+Nếu một turn vượ quá 200 token, fallback chia theo câu.
 
-**Why semantic turn:** An LLM context chunk needs enough surrounding conversation
-to be meaningful. A sliding window that cuts "Kubernetes HPA auto-scales based on..."
-mid-sentence returns low-quality RRF scores. Turn-level chunks preserve the
-question-answer pairing that makes retrieval accurate.
+| Phương pháp                | Chất lượng truy xuất                       | Chi phí lưu trữ               | Hiệu quả context                       |
+| -------------------------- | ------------------------------------------ | ----------------------------- | -------------------------------------- |
+| Semantic turn split (chọn) | Cao — mỗi chunk là một suy nghĩ hoàn chỉnh | Trung bình — 1-3 chunk/memory | Tốt — chunk tự chứa đủ ngữ cảnh        |
+| Sliding window 128 token   | Thấp — cắt giữa câu, mất nghĩa             | Cao — 5-10x nhiều chunk       | Kém — nhiều chunk rời rạc không signal |
+| Mỗi câu một chunk          | Trung bình-thấp — quá tơi xỉ               | Rất cao — 10x điểm            | Kém — signal bị phân tán               |
 
-### Decision 2: Feature Schema — Tabular Features Only vs Embedding Features
+**Lý do chọn semantic turn:** LLM cần đủ ngữ cảnh để hiểu một chunk. Một sliding
+window cắt "Kubernetes HPA tự động scale dựa trên..." giữa chừng sẽ cho RRF
+điểm thấp. Turn-level chunk giữ nguyên cặp hỏi-đáp — đó là signal quan trọng
+nhất cho retrieval chất lượng.
 
-**Chosen: Tabular features only** from Feast — `topic_affinity`,
+### Quyết định 2: Lược đồ feature — Tabular Features Only
+
+**Chọn:** Chỉ dùng tabular features từ Feast — `topic_affinity`,
 `preferred_language`, `queries_last_hour`, `distinct_topics_24h`.
 
-| Approach | Latency | Complexity | Retrieval value |
-|---|---|---|---|
-| Tabular (chosen) | <10ms (SQLite) | Simple — direct field access | High — drives query routing/filter |
-| Embedding features | 50-100ms (extra vector search) | High — extra Qdrant collection + sync | Marginal — topic_affinity already covers intent |
+| Phương pháp        | Độ trễ                        | Độ phức tạp                          | Giá trị truy xuất                         |
+| ------------------ | ----------------------------- | ------------------------------------ | ----------------------------------------- |
+| Tabular (chọn)     | <10ms (SQLite)                | Đơn giản — truy cập trường trực tiếp | Cao — định tuyến query, chuyển ngôn ngữ   |
+| Embedding features | 50-100ms (thêm vector search) | Cao — thêm Qdrant collection         | Thấp — `topic_affinity` đã bao phủ intent |
 
-**Why tabular:** The profile features serve the agent's retrieval strategy
-(route to correct topic, adapt language), not similarity search. Storing
-*another* embedding vector for the user profile adds latency without improving
-recall — the episodic vector search already handles similarity. Feature Store's
-strength is **structured key-value lookup**, not vector storage.
+**Lý do chọn tabular:** Các feature profile phục vụ chiến lược truy xuất (chuyển
+topic, chuyển ngôn ngữ), không phải tìm kiếm similarity. Lưu thêm một vector
+embedding cho user profile chỉ tăng độ trễ mà không cải thiện recall — vector
+search episodic memory đã xử lý similarity. Sức mạnh của Feature Store là
+**key-value lookup**, không phải vector storage.
 
-### Decision 3: Freshness Strategy — Immediate Upsert vs Batch Refresh
+### Quyết định 3: Chiến lược làm mới — Immediate Upsert
 
-**Chosen: Immediate upsert** — `remember()` writes to Qdrant synchronously.
-Profile reads use Feast online store (already materialized from NB4).
+**Chọn:** `remember()` ghi ngay vào Qdrant. Profile đọc từ Feast online store.
 
-| Approach | Consistency | Latency | Throughput |
-|---|---|---|---|
-| Immediate upsert (chosen) | Strong — query sees latest memory | ~5ms per write | Low — not for write-heavy streams |
-| 5-min batch refresh | Eventual — query misses last 5 min | ~0ms (no write) | High |
-| Daily batch | Stale — misses recent activity | ~0ms | Very high |
+| Phương pháp             | Đảm bảo nhất quán                    | Độ trễ     | Throughput                              |
+| ----------------------- | ------------------------------------ | ---------- | --------------------------------------- |
+| Immediate upsert (chọn) | Mạnh — truy vấn thấy memory mới ngay | ~5ms/write | Thấp — không phù hợp stream write nhiều |
+| Batch refresh 5 phút    | Eventual — bỏ qua 5 phút             | ~0ms       | Cao                                     |
+| Daily batch             | Trễ — bỏ qua hoạt động gần đây       | ~0ms       | Rất cao                                 |
 
-**Per use case:**
+**Áp dụng theo use case:**
 
-| Use case | Strategy | Rationale |
-|---|---|---|
-| "Tôi vừa đọc xong tài liệu này, hãy nhớ" | **Immediate** | User expects confirmation it was saved |
-| "Recommend đọc gì tiếp" | **Immediate** | Uses latest topic_affinity from profile |
-| Analytics dashboard (user behavior trends) | **Daily** | No need sub-second freshness |
-| Fraud detection (real-time) | **Streaming** (5-min) | Not in scope for this POC |
+| Use case                    | Chiến lược             | Lý do                          |
+| --------------------------- | ---------------------- | ------------------------------ |
+| "Tôi vừa đọx xong, hãy nhớ" | **Immediate**          | User mong nhận được xác nhận   |
+| "Recommend đọc gì tiếp"     | **Immediate**          | Dùng `topic_affinity` mới nhất |
+| Analytics dashboard         | **Daily**              | Không cần real-time            |
+| Phát hiện gian lận          | **Streaming** (5 phút) | Ngoài scope POC này            |
 
-## 4. Rejected Alternative
+## 4. Lựa chọn đã loại bỏ
 
-**Considered: Storing episodic memory in Feast as an embedding feature view.**
+**Xét nghĩa: Lưu trữ episodic memory trong Feast như embedding feature view.**
 
-This would let Feast manage both stable profile and episodic vectors through
-unified infrastructure.
+Điều này giúp Feast quản lý cả profile và vector episodic qua hạ tầng thống nhất.
 
-**Rejected because:** Episodic memory has a fundamentally different access
-pattern and update cadence than stable profile:
-- **Profile:** append-only updates, long TTL (30 days), batch materialize fine.
-- **Episodic:** append-every-conversation, short relevance window, high write
-  rate, no PIT-join needed.
+**Loại bỏ vì:** Episodic memory có access pattern và update cadence hoàn toàn
+khác với stable profile:
 
-Mixing them in one FeatureView would force the entire collection to use the
-shorter TTL, evicting stable profile data prematurely. The two systems also
-have incompatible serving patterns: Feast is optimized for key-value lookups,
-Qdrant is optimized for k-NN / RRF. Keeping them separate lets each system
-optimize for its workload.
+- **Profile:** append-only, TTL dài (30 ngày), batch materialize OK.
+- **Episodic:** append mỗi cuộc hội thoại, cửa sổ thời gian ngắn, tần suất ghi
+  cao, không cần PIT join.
 
-## 5. Vietnamese-Context Considerations
+Nếu trộn cả hai trong một FeatureView, toàn bộ collection sẽ phải dùng TTL
+ngắn hơn — evict profile ổn định trước thời hạn. Hai hệ thống còn có serving
+pattern không tương thích: Feast tối ưu cho key-value lookup, Qdrant tối ưu
+cho k-NN / RRF. Tách biệt giúp mỗi hệ tối ưu cho workload của nó.
 
-1. **Tokenization for BM25:** The agent uses whitespace tokenize
-   (`_tokenize()` = `text.lower().split()`) inherited from `app/search.py`.
-   This is "good enough" for mixed Vietnamese+English technical text but
-   misses subword information. Production should use `underthesea` (word
-   segmentation) or `pyvi` for better keyword recall.
+## 5. Cân nhắc ngữ cảnh tiếng Việt
 
-2. **Code-switching (Vi/En mix):** The `TOPIC_HINTS` map in `app/agent.py`
-   already handles this — e.g., `"cloud"` topic matches both `"đám mây"` and
-   `"cloud"`. The agent inherits this pattern from the lab's existing `ToolArgs`
-   schema.
+1. **Tokenizer cho BM25:** Dùng whitespace tokenize kế thừa từ
+   `app/search.py`. Đủ dùng cho text Việt-Anh hỗn hợp nhưng bỏ sót subword.
+   Production nên dùng `underthesea` hoặc `pyvi`.
 
-3. **Embedding model limitation:** `bge-small-en-v1.5` is English-trained.
-   Vietnamese paraphrases suffer (24-32% recall per NB2 results). The agent
-   mitigates this by using **both** BM25 (keyword) and vector (semantic) with
-   RRF — the keyword signal catches verbatim matches that vector misses. For
-   production, swapping to `bge-m3` via `EMBEDDING_BACKEND=bge-m3` (Docker
-   path) would improve Vietnamese recall significantly.
+2. **Code-switching (Vi/En):** Bản đồ `TOPIC_HINTS` trong `app/agent.py` đã xử lý —
+   ví dụ `"cloud"` match cả `"đám mây"` và `"cloud"`. Agent kế thừa pattern này.
 
-4. **Datetime in TTL:** The agent's `ts` field uses Unix timestamps. No
-   timezone issues arise because all operations are within one process
-   lifetime. For multi-day sessions, store `ts` as timezone-aware UTC.
+3. **Giới hạn embedding model:** `bge-small-en-v1.5` training trên tiếng Anh.
+   Vietnamese paraphrases chỉ 24-32% recall (NB2). Agent dùng **cả** BM25 +
+   vector với RRF — keyword bắt được verbatim mà vector bỏ sót. Đổi sang `bge-m3`
+   (qua `EMBEDDING_BACKEND=bge-m3`) sẽ cải thiện đáng kể.
 
-## 6. Limitations (What This POC Doesn't Handle)
+4. **Timestamp:** Dùng Unix timestamp. Không vấn đề timezone vì single process.
+   Đối với session đa ngày, lưu dưới dạng UTC có timezone.
 
-- **Per-user privacy isolation:** In-memory Qdrant doesn't enforce tenant
-  isolation. Production needs `user_id` filter on every query (implemented
-  here) but also encryption at rest and access control middleware.
-- **Memory decay / forgetting:** No TTL-based eviction of old episodic
-  memories. A production system should prune memories older than N days.
-- **Multi-device sync:** Two devices running the agent separately would
-  create divergent memory stores. Need a shared backend (Qdrant server,
-  not in-memory).
-- **No LLM integration:** `recall()` returns a context string — it does not
-  call an LLM to generate the final response. The POC ends at context
-  assembly; the "assistant turn" is a stub for the user.
-- **No CRUD on memories:** Can only `remember` (append). No delete, update,
-  or explicit forget. User can't remove a memory they regret sharing.
+## 6. Giới hạn của POC
+
+- **Phân cách tenant:** In-memory Qdrant không enforce isolation. Production cần
+  `user_id` filter + encryption + access control middleware.
+- **Memory decay:** Không có TTL evict cũ. Cần prune memory cũ hơn N ngày.
+- **Đồng bộ đa thiết bị:** Hai device chạy agent riêng biệt sẽ có memory store
+  khác nhau. Cần backend chung (Qdrant server, không phải in-memory).
+- **Không tích hợp LLM:** `recall()` trả về context string — không gọi LLM sinh
+  câu trả lời. POC dừng ở bước assembly.
+- **Không CRUD memory:** Chỉ `remember` (append). Không có delete/update/forget.
