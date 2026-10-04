@@ -185,7 +185,15 @@ else:
 import pandas as pd
 entity_df = pd.DataFrame({
     "user_id": ["u_001", "u_002", "u_003"],
-    "event_timestamp": [NOW - timedelta(hours=2), NOW - timedelta(hours=1), NOW],
+    # Entity timestamps must be AFTER the feature event_timestamp so the PIT
+    # join has valid feature values for all 3 rows (rubric: "3 rows × N features").
+    # Feature timestamps are NOW - timedelta(hours=i % 48); using minutes keeps
+    # every entity event after its feature was recorded.
+    "event_timestamp": [
+        NOW - timedelta(minutes=30),
+        NOW - timedelta(minutes=15),
+        NOW,
+    ],
 })
 
 historical = fs.get_historical_features(

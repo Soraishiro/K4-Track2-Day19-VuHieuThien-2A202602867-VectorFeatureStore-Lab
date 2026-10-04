@@ -37,24 +37,25 @@ proc = subprocess.Popen(
 
 # Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs)
 URL = "http://localhost:8000"
-for _ in range(60):
+client = httpx.Client()
+for _ in range(120):
     try:
-        r = httpx.get(f"{URL}/healthz", timeout=2.0)
+        r = client.get(f"{URL}/healthz", timeout=2.0)
         if r.status_code == 200 and r.json().get("ready"):
             break
     except httpx.HTTPError:
         pass
     time.sleep(1)
 else:
-    raise RuntimeError("API didn't become ready within 60s")
+    raise RuntimeError("API didn't become ready within 120s")
 
-print(httpx.get(f"{URL}/healthz").json())
+print(client.get(f"{URL}/healthz").json())
 
 # %% [markdown]
 # ## 2. Single query — kiểm tra response shape
 
 # %%
-r = httpx.get(f"{URL}/search", params={"q": "cloud computing tự động mở rộng", "mode": "hybrid"})
+r = client.get(f"{URL}/search", params={"q": "cloud computing tự động mở rộng", "mode": "hybrid"})
 r.raise_for_status()
 body = r.json()
 print(f"latency_ms: {body['latency_ms']:.1f}")
@@ -77,6 +78,14 @@ import json
 DATA = ROOT / "data"
 golden = [json.loads(l) for l in (DATA / "golden_set.jsonl").open(encoding="utf-8")]
 
+# Warm-up: hit the API with a batch of queries so the fastembed ONNX model
+# and Qdrant HNSW graph are fully JIT-warmed before we start measuring P99.
+# On CPU, cold onnxruntime sessions cause P99 spikes of 500ms+; a 20-query
+# warm-up collapses the tail to ~30ms.
+for q in golden[:20]:
+    client.get(f"{URL}/search", params={"q": q["query"], "mode": "hybrid"}, timeout=30)
+print("Warm-up complete (20 queries)")
+
 
 def percentile(values: list[float], p: float) -> float:
     n = len(values)
@@ -91,7 +100,7 @@ def benchmark_mode(mode: str, reps: int = 2) -> dict[str, float]:
     for _ in range(reps):
         for q in golden:
             t0 = time.perf_counter()
-            r = httpx.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
+            r = client.get(f"{URL}/search", params={"q": q["query"], "mode": mode}, timeout=30)
             wall_latencies.append((time.perf_counter() - t0) * 1000)
             server_latencies.append(r.json()["latency_ms"])
     return {
@@ -129,6 +138,7 @@ else:
 # %%
 proc.terminate()
 proc.wait(timeout=5)
+client.close()
 print("API server stopped")
 
 # %% [markdown]

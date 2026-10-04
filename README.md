@@ -5,10 +5,10 @@ Build hybrid search API + Feast feature store hoàn chỉnh, đo Precision@10 v�
 
 **Hai paths để chọn:**
 
-| Path | Stack | Setup | RAM | Khi nào dùng |
-|---|---|---|---|---|
-| **Lite (default)** | `fastembed` + Qdrant in-memory + SQLite Feast + FastAPI | `bash setup-lite.sh` (~60 s) | ~700 MB | Hầu hết học viên — laptop yếu, không Docker, focus vào concept |
-| **Docker (full)** | Qdrant server + Redis + Postgres + **bge-m3** (1024d, đa ngữ) | `bash setup-docker.sh` (~3-8 min) | ~6 GB | Muốn stack production thật + embedding tốt cho tiếng Việt |
+| Path               | Stack                                                         | Setup                             | RAM     | Khi nào dùng                                                   |
+| ------------------ | ------------------------------------------------------------- | --------------------------------- | ------- | -------------------------------------------------------------- |
+| **Lite (default)** | `fastembed` + Qdrant in-memory + SQLite Feast + FastAPI       | `bash setup-lite.sh` (~60 s)      | ~700 MB | Hầu hết học viên — laptop yếu, không Docker, focus vào concept |
+| **Docker (full)**  | Qdrant server + Redis + Postgres + **bge-m3** (1024d, đa ngữ) | `bash setup-docker.sh` (~3-8 min) | ~6 GB   | Muốn stack production thật + embedding tốt cho tiếng Việt      |
 
 > Cả hai paths dùng **cùng `qdrant-client` API và Feast definitions** — bạn có
 > thể đổi giữa hai paths bất cứ lúc nào bằng cách đổi `QDRANT_MODE` trong `.env`.
@@ -85,11 +85,11 @@ Endpoints: Qdrant http://localhost:6333 · Redis :6379 · Postgres :5432
 make runtime-check     # in ra runtime nào có, version bao nhiêu, làm được gì
 ```
 
-| Runtime | Compose? | Lệnh |
-|---|---|---|
-| **Docker Desktop** | có | `bash setup-docker.sh` (dùng `docker compose`) |
-| **Apple `container`** | **không** | `make container-up` rồi `bash setup-docker.sh` |
-| **Podman** | có (podman-compose) | `podman compose up -d` rồi `bash setup-docker.sh` |
+| Runtime               | Compose?            | Lệnh                                              |
+| --------------------- | ------------------- | ------------------------------------------------- |
+| **Docker Desktop**    | có                  | `bash setup-docker.sh` (dùng `docker compose`)    |
+| **Apple `container`** | **không**           | `make container-up` rồi `bash setup-docker.sh`    |
+| **Podman**            | có (podman-compose) | `podman compose up -d` rồi `bash setup-docker.sh` |
 
 [**Apple `container`**](https://github.com/apple/container) chạy OCI image trong
 micro-VM trên Apple silicon (macOS 26+), **không có compose**, nên
@@ -118,21 +118,21 @@ make container-down ARGS=--wipe   # dừng + xoá volume
 
 ## Cấu trúc & tiến trình
 
-| Notebook | Skill | Slide deliverable | Pass when… |
-|---|---|---|---|
-| `01_embeddings_index` | Embed corpus với `fastembed` + index in Qdrant + similarity search | Bullet 1 — top-5 results trả về cho query VN | indexed = 1000 vectors; top-5 cho paraphrase query đúng cluster |
-| `02_hybrid_search_rrf` | BM25 + vector + RRF (k=60) + đánh giá Precision@10 trên 50 golden queries | Bullet 2 — hybrid > keyword & semantic | Hybrid wins on `mixed` slice; thắng trung bình tổng thể |
-| `03_search_api_benchmark` | FastAPI `/search?q=...&mode=...` + đo P50/P95/P99 latency | Bullet 1 + 4 — REST endpoint < 50ms P99 | Hybrid P99 server-side < 50 ms |
-| `04_feast_feature_store` | 3 feature views + `feast apply` + `materialize` + online lookup + PIT join | Bullet 3 — Feast 3 views materialize+online | `materialize` thành công; online lookup P99 < 10ms |
+| Notebook                  | Skill                                                                      | Slide deliverable                            | Pass when…                                                      |
+| ------------------------- | -------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| `01_embeddings_index`     | Embed corpus với `fastembed` + index in Qdrant + similarity search         | Bullet 1 — top-5 results trả về cho query VN | indexed = 1000 vectors; top-5 cho paraphrase query đúng cluster |
+| `02_hybrid_search_rrf`    | BM25 + vector + RRF (k=60) + đánh giá Precision@10 trên 50 golden queries  | Bullet 2 — hybrid > keyword & semantic       | Hybrid wins on `mixed` slice; thắng trung bình tổng thể         |
+| `03_search_api_benchmark` | FastAPI `/search?q=...&mode=...` + đo P50/P95/P99 latency                  | Bullet 1 + 4 — REST endpoint < 50ms P99      | Hybrid P99 server-side < 50 ms                                  |
+| `04_feast_feature_store`  | 3 feature views + `feast apply` + `materialize` + online lookup + PIT join | Bullet 3 — Feast 3 views materialize+online  | `materialize` thành công; online lookup P99 < 10ms              |
 
 ### Khối nâng cao (NB5–NB8) — theo bản deck mở rộng 2026
 
-| Notebook | Skill | Slide | Pass when… |
-|---|---|---|---|
-| `05_filtered_search` | post-filter vs pre-filter vs filtered-ANN, đo recall theo độ chọn lọc | §3 Filtered Search | post-filter sập ở filter ~4%; filtered-ANN giữ recall 1.00 |
-| `06_agent_retrieval` | retrieval-as-a-tool, planner tách câu hỏi, reflection, ghép ngữ cảnh với Feast | §6 Agentic Retrieval | agentic > single-shot về recall **và** balance, ở **cùng ngân sách** |
-| `07_semantic_cache` | ngưỡng / TTL / namespace + demo rò chéo tenant | §6 Semantic Cache + Bảo mật | bảng sweep có cả cột "trả lời sai"; demo leak rồi fix được |
-| `08_feature_engineering` | 6 họ feature, target-encoding leakage, PIT vs latest join, on-demand feature view | §7 Feature Engineering | leak gap > 0.30 trên `session_id`; ODFV trả 2 giá trị khác nhau cho cùng user |
+| Notebook                 | Skill                                                                             | Slide                       | Pass when…                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------- |
+| `05_filtered_search`     | post-filter vs pre-filter vs filtered-ANN, đo recall theo độ chọn lọc             | §3 Filtered Search          | post-filter sập ở filter ~4%; filtered-ANN giữ recall 1.00                    |
+| `06_agent_retrieval`     | retrieval-as-a-tool, planner tách câu hỏi, reflection, ghép ngữ cảnh với Feast    | §6 Agentic Retrieval        | agentic > single-shot về recall **và** balance, ở **cùng ngân sách**          |
+| `07_semantic_cache`      | ngưỡng / TTL / namespace + demo rò chéo tenant                                    | §6 Semantic Cache + Bảo mật | bảng sweep có cả cột "trả lời sai"; demo leak rồi fix được                    |
+| `08_feature_engineering` | 6 họ feature, target-encoding leakage, PIT vs latest join, on-demand feature view | §7 Feature Engineering      | leak gap > 0.30 trên `session_id`; ODFV trả 2 giá trị khác nhau cho cùng user |
 
 > **NB1–NB4 là bắt buộc.** NB5–NB8 là khối nâng cao bám sát phần deck mới
 > (filtered search, agentic retrieval, semantic cache, feature engineering).
@@ -169,7 +169,7 @@ Chấm điểm: xem [`rubric.md`](rubric.md). **100 pts core (NB1–NB4) + 50 pt
 
 Lab này được thiết kế cho **vibe-coding era** với CLI workflow: bạn dùng
 AI assistant trong terminal (Claude Code, Codex CLI, OpenCode) để
-generate boilerplate, focus vào *judgment decisions*. Đọc
+generate boilerplate, focus vào _judgment decisions_. Đọc
 [`VIBE-CODING.md`](VIBE-CODING.md) **trước khi bắt đầu NB1** (5–10 phút)
 — file đó là general primer cover:
 
@@ -181,7 +181,7 @@ generate boilerplate, focus vào *judgment decisions*. Đọc
 - 3 anti-patterns phổ biến
 
 Mỗi notebook cũng có **vibe-coding callout** ở cuối: nói rõ subtask nào
-trong notebook đó *nên* delegate cho AI, subtask nào *phải* bạn tự nghĩ.
+trong notebook đó _nên_ delegate cho AI, subtask nào _phải_ bạn tự nghĩ.
 
 ---
 
@@ -190,7 +190,7 @@ trong notebook đó *nên* delegate cho AI, subtask nào *phải* bạn tự ngh
 Một creative session 4–6 giờ: thiết kế và build minimal **AI assistant với
 hybrid memory** kết hợp Vector Store (episodic memory) và Feature Store
 (stable user profile). Vibe coding khuyến khích — code boilerplate AI lo,
-*architecture decisions* bạn tự nghĩ + viết.
+_architecture decisions_ bạn tự nghĩ + viết.
 
 Format: brainstorm-first (15 phút sketching), code-second, làm đôi 2-3
 học viên cũng được. Full brief + self-checklist:
@@ -243,16 +243,16 @@ học viên cũng được. Full brief + self-checklist:
 
 ## Troubleshooting
 
-| Triệu chứng | Fix |
-|---|---|
-| `setup-lite.sh` báo `python3: command not found` | Install Python 3.10+ (https://www.python.org/downloads/) |
-| `make api` → port 8000 in use | `lsof -ti:8000 \| xargs kill -9` hoặc đổi `--port 8001` |
-| NB1 báo `expected 1000 indexed, got X` | Chưa `make seed`; chạy lại |
-| NB2 hybrid không thắng | Check RRF công thức: `1/(k + rank)` **rank 1-based**, không phải 0-based |
-| NB3 P99 > 50ms | Bình thường ở cold start. Chạy 10 query warmup trước rồi đo lại. |
-| NB4 `feast apply` lỗi | Xoá `app/feast_repo/registry.db` và chạy lại |
-| Docker path: `port 6333 already allocated` | `docker compose down` rồi `docker compose up -d` |
-| Docker path: Qdrant timeout | Đợi 60s sau `docker compose up`; image lần đầu pull ~200MB |
+| Triệu chứng                                      | Fix                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------ |
+| `setup-lite.sh` báo `python3: command not found` | Install Python 3.10+ (https://www.python.org/downloads/)                 |
+| `make api` → port 8000 in use                    | `lsof -ti:8000 \| xargs kill -9` hoặc đổi `--port 8001`                  |
+| NB1 báo `expected 1000 indexed, got X`           | Chưa `make seed`; chạy lại                                               |
+| NB2 hybrid không thắng                           | Check RRF công thức: `1/(k + rank)` **rank 1-based**, không phải 0-based |
+| NB3 P99 > 50ms                                   | Bình thường ở cold start. Chạy 10 query warmup trước rồi đo lại.         |
+| NB4 `feast apply` lỗi                            | Xoá `app/feast_repo/registry.db` và chạy lại                             |
+| Docker path: `port 6333 already allocated`       | `docker compose down` rồi `docker compose up -d`                         |
+| Docker path: Qdrant timeout                      | Đợi 60s sau `docker compose up`; image lần đầu pull ~200MB               |
 
 ---
 

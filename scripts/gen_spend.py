@@ -22,10 +22,10 @@ def main() -> int:
         for days_ago in (2, 1, 0):
             rows.append({
                 "user_id": u,
-                "event_timestamp": now - pd.Timedelta(f"{days_ago}D"),
+                "event_timestamp": now - pd.Timedelta(np.int64(days_ago), unit="D"),
                 "avg_amount_7d": round(base * float(rng.uniform(0.9, 1.1)), 2),
                 "txn_count_7d": int(rng.integers(3, 40)),
-                "created": now - pd.Timedelta(f"{days_ago}D"),
+                "created": now - pd.Timedelta(np.int64(days_ago), unit="D"),
             })
     df = pd.DataFrame(rows)
     path = OUT / "user_spend.parquet"
