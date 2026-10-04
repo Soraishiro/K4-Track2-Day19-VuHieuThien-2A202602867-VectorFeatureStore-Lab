@@ -156,7 +156,7 @@ Mapping 1-to-1 với slide deliverable bullets:
 Khối nâng cao:
 
 5. **NB5** — Bảng recall theo độ chọn lọc + over-fetch ladder.
-6. **NB6** — Bảng 3 chiến lược ở cùng ngân sách + trace reflection + `build_context()`.
+6. **NB6** — Bảng 3 chiến lược ở cùng ngân sách + trace r eflection + `build_context()`.
 7. **NB7** — Bảng sweep ngưỡng (tiết kiệm **và** trả lời sai) + demo rò chéo tenant.
 8. **NB8** — Bảng leakage + PIT vs latest join + on-demand feature view.
 
